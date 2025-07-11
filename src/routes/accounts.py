@@ -6,13 +6,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from database import get_db, ActivationTokenModel, UserModel
+from database import get_db, ActivationTokenModel, UserModel, PasswordResetTokenModel
 from database.crud import create_user, get_user_by_email
 from schemas import (
     UserRegistrationRequestSchema,
     UserRegistrationResponseSchema,
     UserActivationRequestSchema,
     MessageResponseSchema,
+    PasswordResetRequestSchema,
 )
 
 router = APIRouter()
@@ -80,3 +81,29 @@ async def activate(
     await db.commit()
 
     return MessageResponseSchema(message="User account activated successfully.")
+
+
+@router.post(
+    "/password-reset/request/",
+    response_model=MessageResponseSchema,
+)
+async def password_reset_request(
+    data: PasswordResetRequestSchema,
+    db: AsyncSession = Depends(get_db),
+) -> MessageResponseSchema:
+    db_user = await get_user_by_email(db, data.email)
+    if db_user and db_user.is_active:
+        existing_token_stmt = select(PasswordResetTokenModel).where(
+            PasswordResetTokenModel.user_id == db_user.id
+        )
+        existing_token_result = await db.execute(existing_token_stmt)
+        existing_token = existing_token_result.scalar_one_or_none()
+        if existing_token:
+            await db.delete(existing_token)
+            await db.commit()
+        new_token = PasswordResetTokenModel(user_id=db_user.id)
+        db.add(new_token)
+        await db.commit()
+    return MessageResponseSchema(
+        message="If you are registered, you will receive an email with instructions."
+    )

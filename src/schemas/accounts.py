@@ -33,7 +33,12 @@ class UserActivationRequestSchema(BaseModel):
     email: EmailStr
     token: str
 
+
 class MessageResponseSchema(BaseModel):
     message: str
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class PasswordResetRequestSchema(BaseModel):
+    email: EmailStr
