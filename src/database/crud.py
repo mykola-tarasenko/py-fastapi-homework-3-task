@@ -10,7 +10,7 @@ async def create_user(db: AsyncSession, user: UserRegistrationRequestSchema):
     db.add(db_user)
     await db.commit()
     await db.refresh(db_user)
-    activation_token = ActivationTokenModel(user=db_user)
+    activation_token = ActivationTokenModel(user_id=db_user.id)
     db.add(activation_token)
     await db.commit()
     return db_user

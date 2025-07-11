@@ -1,8 +1,6 @@
 from datetime import datetime, timezone
-from os import access
 
 from fastapi import APIRouter, Depends, HTTPException
-from pycparser.ply.yacc import token
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,7 +28,6 @@ from schemas import (
     TokenRefreshResponseSchema,
     TokenRefreshRequestSchema,
 )
-from security.interfaces import JWTAuthManagerInterface
 from security.token_manager import JWTAuthManager
 
 router = APIRouter()
@@ -59,12 +56,11 @@ async def register(
             detail=str(msg),
         )
     except SQLAlchemyError:
+        await db.rollback()
         raise HTTPException(
             status_code=500,
             detail="An error occurred during user creation.",
         )
-    finally:
-        await db.rollback()
 
 
 @router.post(
@@ -81,7 +77,7 @@ async def activate(
         raise HTTPException(status_code=400, detail="User account is already active.")
 
     token = await db.scalar(
-        select(ActivationTokenModel).where(ActivationTokenModel.user == db_user)
+        select(ActivationTokenModel).where(ActivationTokenModel.user_id == db_user.id)
     )
 
     if (
@@ -216,7 +212,6 @@ async def refresh(
     data: TokenRefreshRequestSchema,
     db: AsyncSession = Depends(get_db),
     jwt_manager: JWTAuthManager = Depends(get_jwt_auth_manager),
-    settings: BaseAppSettings = Depends(get_settings),
 ) -> TokenRefreshResponseSchema:
     try:
         token_data = jwt_manager.decode_refresh_token(data.refresh_token)
@@ -244,7 +239,7 @@ async def refresh(
         if not db_user:
             raise HTTPException(status_code=404, detail="User not found.")
 
-        access_token = jwt_manager.create_access_token({"user_id": 1})
+        access_token = jwt_manager.create_access_token({"user_id": db_user.id})
         return TokenRefreshResponseSchema(access_token=access_token)
     except TokenExpiredError:
         raise HTTPException(status_code=400, detail="Token has expired.")
