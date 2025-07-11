@@ -17,6 +17,7 @@ from database import (
     RefreshTokenModel,
 )
 from database.crud import create_user, get_user_by_email
+from exceptions import TokenExpiredError
 from schemas import (
     UserRegistrationRequestSchema,
     UserRegistrationResponseSchema,
@@ -26,6 +27,8 @@ from schemas import (
     PasswordResetCompleteRequestSchema,
     UserLoginRequestSchema,
     UserLoginResponseSchema,
+    TokenRefreshResponseSchema,
+    TokenRefreshRequestSchema,
 )
 from security.interfaces import JWTAuthManagerInterface
 from security.token_manager import JWTAuthManager
@@ -203,3 +206,45 @@ async def login(
             status_code=500,
             detail="An error occurred while processing the request.",
         )
+
+
+@router.post(
+    "/refresh/",
+    response_model=TokenRefreshResponseSchema,
+)
+async def refresh(
+    data: TokenRefreshRequestSchema,
+    db: AsyncSession = Depends(get_db),
+    jwt_manager: JWTAuthManager = Depends(get_jwt_auth_manager),
+    settings: BaseAppSettings = Depends(get_settings),
+) -> TokenRefreshResponseSchema:
+    try:
+        token_data = jwt_manager.decode_refresh_token(data.refresh_token)
+
+        db_token_stmt = select(RefreshTokenModel).where(
+            RefreshTokenModel.token == data.refresh_token
+        )
+        db_token_result = await db.execute(db_token_stmt)
+        db_token = db_token_result.scalar_one_or_none()
+
+        if not db_token:
+            raise HTTPException(
+                status_code=401,
+                detail="Refresh token not found.",
+            )
+
+        db_user_stmt = (
+            select(UserModel)
+            .options(joinedload(UserModel.refresh_tokens))
+            .where(UserModel.id == token_data["user_id"])
+        )
+        db_user_result = await db.execute(db_user_stmt)
+        db_user = db_user_result.unique().scalar_one_or_none()
+
+        if not db_user:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        access_token = jwt_manager.create_access_token({"user_id": 1})
+        return TokenRefreshResponseSchema(access_token=access_token)
+    except TokenExpiredError:
+        raise HTTPException(status_code=400, detail="Token has expired.")
