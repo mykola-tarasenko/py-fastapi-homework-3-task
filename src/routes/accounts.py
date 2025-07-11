@@ -1,12 +1,21 @@
 from datetime import datetime, timezone
+from os import access
 
 from fastapi import APIRouter, Depends, HTTPException
+from pycparser.ply.yacc import token
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from database import get_db, ActivationTokenModel, UserModel, PasswordResetTokenModel
+from config import get_jwt_auth_manager, BaseAppSettings, get_settings
+from database import (
+    get_db,
+    ActivationTokenModel,
+    UserModel,
+    PasswordResetTokenModel,
+    RefreshTokenModel,
+)
 from database.crud import create_user, get_user_by_email
 from schemas import (
     UserRegistrationRequestSchema,
@@ -15,7 +24,11 @@ from schemas import (
     MessageResponseSchema,
     PasswordResetRequestSchema,
     PasswordResetCompleteRequestSchema,
+    UserLoginRequestSchema,
+    UserLoginResponseSchema,
 )
+from security.interfaces import JWTAuthManagerInterface
+from security.token_manager import JWTAuthManager
 
 router = APIRouter()
 
@@ -146,4 +159,47 @@ async def password_reset_complete(
     except SQLAlchemyError:
         raise HTTPException(
             status_code=500, detail="An error occurred while resetting the password."
+        )
+
+
+@router.post(
+    "/login/",
+    response_model=UserLoginResponseSchema,
+    status_code=201,
+)
+async def login(
+    data: UserLoginRequestSchema,
+    db: AsyncSession = Depends(get_db),
+    jwt_manager: JWTAuthManager = Depends(get_jwt_auth_manager),
+    settings: BaseAppSettings = Depends(get_settings),
+) -> UserLoginResponseSchema:
+    try:
+        db_user = await get_user_by_email(db, data.email)
+
+        if not db_user or not db_user.verify_password(data.password):
+            raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+        if not db_user.is_active:
+            raise HTTPException(
+                status_code=403, detail="User account is not activated."
+            )
+
+        token_data = {"user_id": db_user.id}
+
+        access_token = jwt_manager.create_access_token(token_data)
+        refresh_token = jwt_manager.create_refresh_token(token_data)
+
+        refresh_token_to_save = RefreshTokenModel.create(
+            db_user.id, settings.LOGIN_TIME_DAYS, refresh_token
+        )
+        db.add(refresh_token_to_save)
+        await db.commit()
+
+        return UserLoginResponseSchema(
+            access_token=access_token, refresh_token=refresh_token
+        )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while processing the request.",
         )
